@@ -1,0 +1,57 @@
+{
+  "name": "SourceCredibility",
+  "type": "object",
+  "properties": {
+    "source_name": {
+      "type": "string",
+      "description": "Name of the news source"
+    },
+    "credibility_score": {
+      "type": "number",
+      "description": "Credibility score 0-100"
+    },
+    "total_articles": {
+      "type": "number",
+      "description": "Total articles analyzed"
+    },
+    "verified_articles": {
+      "type": "number",
+      "description": "Articles verified as true"
+    },
+    "suspicious_articles": {
+      "type": "number",
+      "description": "Articles marked suspicious"
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "trusted",
+        "moderate",
+        "unreliable",
+        "unknown"
+      ],
+      "description": "Source category"
+    },
+    "articles": {
+      "type": "array",
+      "description": "Recent articles analyzed",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "source_name"
+  ]
+}
