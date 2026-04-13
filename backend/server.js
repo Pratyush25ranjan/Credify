@@ -9,7 +9,9 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
-
+app.get("/", (req, res) => {
+  res.send("Credify API is running 🚀");
+});
 app.post("/verify-news", async (req, res) => {
   const { text } = req.body;
 
