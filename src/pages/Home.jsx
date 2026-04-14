@@ -16,24 +16,43 @@ export default function Home() {
     setResult(null);
 
     try {
-      // 🔥 Call your backend
-      const res = await fetch("http://localhost:5000/analyze", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ text: claim }),
-      });
+      const res = await fetch(
+        "https://credify-eg2e.onrender.com/verify-news",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ text: claim }),
+        }
+      );
 
       const data = await res.json();
 
-      // ✅ Normalize result (important for UI)
+      const score = data.credibilityScore;
+
+      // 🔥 FIXED + IMPROVED LOGIC
       const formattedResult = {
-        status: data.label || data.status || "Unknown",
-        confidence: data.confidence || 90,
-        explanation: data.reason || "No explanation available",
-        trustedMatches: data.trustedMatches || [],
-        otherMatches: data.otherMatches || [],
+       verdict:
+  score >= 0.75
+    ? "true"
+    : score >= 0.4
+    ? "partial"
+    : "not_reliable",
+
+        confidence_score: Math.round(score * 100),
+
+        explanation: `Matched with ${data.articles.length} news sources`,
+
+        trusted_matches: data.articles.length,
+
+        total_sources_checked: data.articles.length,
+
+        sources: data.articles.map((a) => ({
+          title: a.title,
+          url: a.url,
+          is_trusted: true, // upgrade later
+        })),
       };
 
       setResult(formattedResult);
@@ -41,8 +60,8 @@ export default function Home() {
       // ✅ Save to Firebase
       await addDoc(collection(db, "verificationHistory"), {
         text: claim,
-        status: formattedResult.status,
-        confidence: formattedResult.confidence,
+        verdict: formattedResult.verdict,
+        confidence: formattedResult.confidence_score,
         created_date: new Date().toISOString(),
       });
 
