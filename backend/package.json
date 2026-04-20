@@ -15,7 +15,8 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
-    "natural": "^8.1.1"
+    "natural": "^8.1.1",
+    "rss-parser": "^3.13.0"
   },
   "description": ""
 }
