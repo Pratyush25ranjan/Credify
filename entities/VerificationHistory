@@ -1,0 +1,60 @@
+{
+  "name": "VerificationHistory",
+  "type": "object",
+  "properties": {
+    "claim": {
+      "type": "string",
+      "description": "The news claim submitted by the user"
+    },
+    "verdict": {
+      "type": "string",
+      "enum": [
+        "true",
+        "partial",
+        "not_reliable"
+      ],
+      "description": "Verification result"
+    },
+    "confidence_score": {
+      "type": "number",
+      "description": "Confidence percentage 0-100"
+    },
+    "trusted_matches": {
+      "type": "number",
+      "description": "Number of trusted source matches"
+    },
+    "total_sources_checked": {
+      "type": "number",
+      "description": "Total sources checked"
+    },
+    "explanation": {
+      "type": "string",
+      "description": "AI-generated explanation"
+    },
+    "sources": {
+      "type": "array",
+      "description": "List of sources found",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "is_trusted": {
+            "type": "boolean"
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "claim",
+    "verdict"
+  ]
+}
