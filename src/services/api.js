@@ -1,7 +1,7 @@
 export const analyzeNewsAPI = async (text) => {
   try {
     const res = await fetch(
-      "https://credify-eg2e.onrender.com/verify-news",
+      "http://localhost:5000/verify-news", // ✅ FIXED
       {
         method: "POST",
         headers: {
@@ -13,7 +13,6 @@ export const analyzeNewsAPI = async (text) => {
 
     const data = await res.json();
 
-    // Convert backend response → UI format
     return {
       status:
         data.credibilityScore > 0.7
@@ -22,16 +21,16 @@ export const analyzeNewsAPI = async (text) => {
           ? "Partially True ⚠️"
           : "Fake ❌",
 
-      reason: `Matched with ${data.articles.length} news sources`,
+      reason: `Matched with ${data.sourcesChecked} sources`, // ✅ better field
 
-      trustedMatches: data.articles.map((a) => ({
+      trustedMatches: Object.values(data.trustedSources || {}).flat().map((a) => ({
         title: a.title,
         url: a.url,
         source: a.source,
         score: a.score,
       })),
 
-      otherMatches: [],
+      otherMatches: data.otherSources || [],
     };
   } catch (error) {
     console.error("API Error:", error);

@@ -17,7 +17,7 @@ export default function Home() {
 
     try {
       const res = await fetch(
-        "https://credify-eg2e.onrender.com/verify-news",
+        "http://localhost:5000/verify-news",
         {
           method: "POST",
           headers: {

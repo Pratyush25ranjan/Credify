@@ -151,19 +151,16 @@ export default function VerificationResult({ result }) {
             </div>
           )}
 
-          {/* 🔹 AI Section */}
-          {activeTab === "ai" && (
-            <div className="space-y-3">
-              <div className="p-4 bg-muted rounded-xl">
-                <p className="font-semibold mb-2">
-                  Verdict: {result.ai?.verdict || "Unknown"}
-                </p>
-                <p className="text-sm text-muted-foreground">
-                  {result.ai?.explanation || "No explanation available"}
-                </p>
-              </div>
-            </div>
-          )}
+        {/* 🔹 AI Section */}
+{activeTab === "ai" && (
+  <div className="space-y-3">
+    <div className="p-4 bg-muted rounded-xl">
+      <p className="text-sm text-muted-foreground whitespace-pre-wrap">
+        {result.ai?.explanation || "No AI response available"}
+      </p>
+    </div>
+  </div>
+)}
 
         </CardContent>
       </Card>
