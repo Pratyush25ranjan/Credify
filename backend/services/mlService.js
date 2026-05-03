@@ -13,7 +13,28 @@
  * This score means exactly what it should: the proportion of
  * corroborating evidence weighted by source trustworthiness.
  */
+import dotenv from "dotenv";
+dotenv.config();
+const API_KEYS = [
+  process.env.GEMINI_API_KEY_1,
+  
+].filter(Boolean);
 
+let currentKeyIndex = 0;
+
+function getNextApiKey() {
+  const key = API_KEYS[currentKeyIndex];
+
+  console.log(
+    "Using Gemini key:",
+    currentKeyIndex + 1
+  );
+
+  currentKeyIndex =
+    (currentKeyIndex + 1) % API_KEYS.length;
+
+  return key;
+}
 import { extract } from "@extractus/article-extractor";
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 
@@ -21,11 +42,11 @@ import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/ge
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────
 
-const TOP_N_FOR_STANCE = 7;        // articles to fetch full text for
+const TOP_N_FOR_STANCE = 3;        // articles to fetch full text for
 const MAX_PER_TRUSTED_SOURCE = 3;
 const MAX_OTHER_SOURCES = 5;
 const ARTICLE_FETCH_TIMEOUT_MS = 8000;
-const ARTICLE_TEXT_CHAR_LIMIT = 1200; // truncate before sending to Gemini
+const ARTICLE_TEXT_CHAR_LIMIT = 600; // truncate before sending to Gemini
 const TRUSTED_SOURCE_WEIGHT = 1.5;
 
 // Trusted source registry — checked against BOTH source name and URL
@@ -46,7 +67,11 @@ const TRUSTED_SOURCE_MAP = {
 // GEMINI SETUP (for stance labelling)
 // ─────────────────────────────────────────────────────────────
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+function getGenAI() {
+  return new GoogleGenerativeAI(
+    getNextApiKey()
+  );
+}
 
 const SAFETY_SETTINGS = [
   { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -55,18 +80,7 @@ const SAFETY_SETTINGS = [
   { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
 ];
 
-const stanceModel = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash",
-  safetySettings: SAFETY_SETTINGS,
-  generationConfig: {
-    temperature: 0.1,
-    maxOutputTokens: 1024,
-    responseMimeType: "application/json",
-  },
-  systemInstruction: `You are a stance detection system for a news fact-checking pipeline.
-Given a claim and article content, classify each article's stance.
-Your ONLY output is a single valid JSON object. No markdown, no explanation outside JSON.`,
-});
+
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS
@@ -155,7 +169,7 @@ async function batchDetectStance(claim, articles) {
       `[Article ${i + 1}]
 Title: ${a.title}
 URL: ${a.url}
-Content: ${a.text.slice(0, 400)}`
+Content: ${a.text.slice(0, 200)}`
     )
     .join("\n\n---\n\n");
 
@@ -185,6 +199,68 @@ Return ONLY JSON array:
   // 🔥 RETRY LOGIC
   for (let attempt = 1; attempt <= 2; attempt++) {
     try {
+      console.log("🚀 Sending stance batch to Gemini...");
+    console.log("Articles count:", articles.length);
+    const genAI = getGenAI();
+
+const stanceModel = genAI.getGenerativeModel({
+  model: "gemini-2.0-flash",
+
+  safetySettings: SAFETY_SETTINGS,
+
+  generationConfig: {
+    temperature: 0.1,
+    maxOutputTokens: 256,
+
+    responseMimeType: "application/json",
+
+    responseSchema: {
+      type: "ARRAY",
+
+      items: {
+        type: "OBJECT",
+
+        properties: {
+          article_index: {
+            type: "NUMBER",
+          },
+
+          stance: {
+            type: "STRING",
+          },
+
+          confidence: {
+            type: "NUMBER",
+          },
+
+          reason: {
+            type: "STRING",
+          },
+        },
+
+        required: [
+          "article_index",
+          "stance",
+          "confidence",
+          "reason",
+        ],
+      },
+    },
+  },
+
+  systemInstruction: `
+You are a stance detection system for a news fact-checking pipeline.
+
+Allowed stance values:
+- SUPPORTS
+- REFUTES
+- UNRELATED
+
+Return ONLY a valid JSON array.
+No markdown.
+No explanations outside JSON.
+`,
+});
       const result = await stanceModel.generateContent(prompt);
 
       const raw = result?.response?.text();
@@ -196,7 +272,21 @@ Return ONLY JSON array:
 
       const clean = raw.replace(/```json|```/g, "").trim();
 
-      const parsed = JSON.parse(clean);
+      let parsed;
+
+try {
+  parsed = JSON.parse(clean);
+
+} catch {
+
+  const match = clean.match(/\[[\s\S]*\]/);
+
+  if (!match) {
+    throw new Error("No JSON array found");
+  }
+
+  parsed = JSON.parse(match[0]);
+}
 
       if (!Array.isArray(parsed)) {
         throw new Error("Invalid JSON format");

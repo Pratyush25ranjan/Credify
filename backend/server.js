@@ -9,7 +9,7 @@ import { analyzeWithAI } from "./services/aiService.js";
 import { fetchTrustedFromRSS } from "./services/rssService.js";
 
 dotenv.config();
-console.log("🔑 KEY FROM ENV:", process.env.GEMINI_API_KEY);
+
 const app = express();
 
 // ============================================================
@@ -27,7 +27,7 @@ const PORT = process.env.PORT || 5000;
 const CACHE_DURATION_MS = 60 * 60 * 1000;
 const CACHE_MAX_SIZE = 200;
 const AXIOS_TIMEOUT_MS = 8000;
-const MAX_ARTICLES_BEFORE_STANCE = 20;
+const MAX_ARTICLES_BEFORE_STANCE = 10;
 const GNEWS_MAX = 25;
 const NEWSAPI_MAX = 25;
 
@@ -54,9 +54,45 @@ const TRUSTED_KEYWORDS = [
 // GEMINI SETUP
 // ============================================================
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const geminiModel = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+const API_KEYS = [
+  process.env.GEMINI_API_KEY_1,
+  
+].filter(Boolean);
+console.log(
+  "Loaded Gemini keys:",
+  API_KEYS.length
+);
 
+console.log(
+  "Loaded Gemini keys:",
+  API_KEYS.length
+);
+
+let currentKeyIndex = 0;
+
+function getNextApiKey() {
+  const key = API_KEYS[currentKeyIndex];
+
+  console.log(
+    "Using Gemini key:",
+    currentKeyIndex + 1
+  );
+
+  currentKeyIndex =
+    (currentKeyIndex + 1) % API_KEYS.length;
+
+  return key;
+}
+
+function getGeminiModel() {
+  const genAI = new GoogleGenerativeAI(
+    getNextApiKey()
+  );
+
+  return genAI.getGenerativeModel({
+    model: "gemini-2.0-flash",
+  });
+}
 // ============================================================
 // LRU CACHE
 // ============================================================
@@ -155,11 +191,25 @@ Rules:
 - Each sub-claim must be a complete sentence that makes sense standalone
 - Keep them concise (under 20 words each)`;
 
-    const result = await geminiModel.generateContent(prompt);
+    const result = await getGeminiModel().generateContent(prompt);
     const raw = result.response?.text?.() || "";
 
     const clean = raw.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
+    let parsed;
+
+try {
+  parsed = JSON.parse(clean);
+
+} catch {
+
+  const match = clean.match(/\[[\s\S]*\]/);
+
+  if (!match) {
+    throw new Error("No JSON array found");
+  }
+
+  parsed = JSON.parse(match[0]);
+}
 
     if (Array.isArray(parsed) && parsed.length > 0) {
       const subClaims = parsed
@@ -182,7 +232,7 @@ async function expandQuery(query) {
 Query: "${query}"
 Return ONLY the improved query, nothing else.`;
 
-    const result = await geminiModel.generateContent(prompt);
+    const result = await getGeminiModel().generateContent(prompt);
     const expanded = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const clean = expanded.replace(/^["']|["']$/g, "").trim();
     return clean.length > 5 ? clean : query;
@@ -237,15 +287,16 @@ async function fetchNewsAPI(query) {
  * Fetch articles for a single sub-claim using all 3 sources.
  */
 async function fetchArticlesForClaim(claim) {
-  const [rssArticles, expandedQuery] = await Promise.all([
-    fetchTrustedFromRSS(claim).catch((err) => {
-      console.warn("⚠️  RSS failed:", err.message);
-      return [];
-    }),
-    expandQuery(claim),
-  ]);
+const rssArticles =
+  await fetchTrustedFromRSS(claim).catch((err) => {
+    console.warn("⚠️ RSS failed:", err.message);
+    return [];
+  });
 
-  const queries = [...new Set([claim, expandedQuery])];
+// 🔥 Disable Gemini query expansion to save quota
+const expandedQuery = claim;
+
+const queries = [claim];
 
   const [gnewsResults, newsApiResults] = await Promise.all([
     Promise.all(queries.map(fetchGNews)),
@@ -284,6 +335,28 @@ function computeVerdictFromStanceScore(stanceScore) {
 app.get("/", (_req, res) => res.send("Credify API is running 🚀"));
 app.get("/health", (_req, res) => res.json({ status: "ok", uptime: process.uptime() }));
 
+app.get("/test-gemini", async (req, res) => {
+  try {
+    const result = await getGeminiModel().generateContent(
+      "Say hello"
+    );
+
+    const text = result.response.text();
+
+    res.json({
+      success: true,
+      text,
+    });
+  } catch (err) {
+    console.error(err);
+
+    res.status(500).json({
+      error: err.message,
+      details: err,
+    });
+  }
+});
+
 app.post("/verify-news", async (req, res) => {
   const { text } = req.body;
 
@@ -305,7 +378,7 @@ app.post("/verify-news", async (req, res) => {
 
   try {
     // ── STEP 1: Decompose claim into sub-claims ───────────────
-    const subClaims = await decomposeClaimIntoSubClaims(trimmed);
+   const subClaims = [trimmed];
 
     // ── STEP 2: Fetch articles for EACH sub-claim ─────────────
     // Run all sub-claim fetches in parallel for speed
@@ -327,7 +400,7 @@ for (let i = 0; i < subClaims.length; i++) {
   subClaimResults.push(result);
 
   // ⏱️ small delay to avoid rate limit
-  await new Promise((r) => setTimeout(r, 200));
+  await new Promise((r) => setTimeout(r, 1500));
 }
 
     // ── STEP 4: Merge sub-claim results ───────────────────────
@@ -378,20 +451,45 @@ console.log({
 let aiResult;
 
 try {
-  // 🔥 Skip AI if not enough useful data
+
+  // 🔥 Skip AI if not enough useful evidence
   if (
     Object.keys(allTrustedSources).length === 0 &&
     allOtherSources.length < 2
   ) {
-    console.log("⚠️ No usable evidence → skipping AI");
+
+    console.log(
+      "⚠️ No usable evidence → skipping AI"
+    );
 
     aiResult = {
       verdict: "UNCERTAIN",
       confidence: 0.5,
-      explanation: "Not enough reliable evidence to perform AI verification.",
+      explanation:
+        "Not enough reliable evidence to perform AI verification.",
       sources: [],
     };
+
+  // 🔥 Skip expensive AI synthesis if stance already decisive
+  } else if (
+    credibilityScore >= 0.85 ||
+    credibilityScore <= 0.15
+  ) {
+
+    console.log(
+      "⚡ Strong stance evidence → skipping AI synthesis"
+    );
+
+    aiResult = {
+      verdict,
+      confidence: credibilityScore,
+      explanation:
+        "Verdict derived directly from weighted stance evidence.",
+      sources: [],
+    };
+
   } else {
+
     // ✅ Normal AI execution
     console.log("🤖 Running AI analysis...");
 
@@ -399,15 +497,22 @@ try {
       subClaims,
       subClaimResults,
       trustedSources: allTrustedSources,
-      otherSources: allOtherSources.slice(0, 2), // limit payload
+      otherSources: allOtherSources.slice(0, 2),
       credibilityScore,
     });
 
-    // 🔍 Debug AI output
-    console.log("✅ AI RESULT:", aiResult);
+    console.log(
+      "✅ AI RESULT:",
+      aiResult
+    );
   }
+
 } catch (err) {
-  console.error("🔥 AI FAILED:", err.message);
+
+  console.error(
+    "🔥 AI FAILED:",
+    err.message
+  );
 
   aiResult = {
     verdict: "UNCERTAIN",

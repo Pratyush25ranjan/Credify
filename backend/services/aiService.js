@@ -15,14 +15,40 @@
  *     - Source hallucination guard
  *     - temperature: 0.1
  */
+import dotenv from "dotenv";
+dotenv.config();
+const API_KEYS = [
+  process.env.GEMINI_API_KEY_1,
+ 
+].filter(Boolean);
 
+let currentKeyIndex = 0;
+
+function getNextApiKey() {
+  const key = API_KEYS[currentKeyIndex];
+
+  console.log(
+    "Using Gemini key:",
+    currentKeyIndex + 1
+  );
+
+  currentKeyIndex =
+    (currentKeyIndex + 1) % API_KEYS.length;
+
+  return key;
+}
+console.log("Loaded Gemini keys:", API_KEYS.length);
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 
 // ─────────────────────────────────────────────────────────────
 // SETUP
 // ─────────────────────────────────────────────────────────────
 
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+function getGenAI() {
+  return new GoogleGenerativeAI(
+    getNextApiKey()
+  );
+}
 
 const SAFETY_SETTINGS = [
   { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -31,22 +57,6 @@ const SAFETY_SETTINGS = [
   { category: HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT, threshold: HarmBlockThreshold.BLOCK_NONE },
 ];
 
-const model = genAI.getGenerativeModel({
-  model: "gemini-2.5-flash",
-  safetySettings: SAFETY_SETTINGS,
-  generationConfig: {
-    temperature: 0.1,
-    topP: 0.8,
-    maxOutputTokens: 768,
-    responseMimeType: "application/json",
-  },
-  systemInstruction: `You are an expert fact-checking AI integrated into a news verification system.
-Your ONLY output is a single valid JSON object. No markdown. No explanation outside the JSON.
-Always classify claims into exactly one of: TRUE, FALSE, PARTIALLY TRUE, UNCERTAIN.
-Base your verdict on the provided evidence (which includes full article text) AND your own knowledge.
-Prioritise evidence from trusted sources (BBC, Reuters, AP, NYT, Al Jazeera).
-The stance data (SUPPORTS/REFUTES/UNRELATED) has already been computed — trust it, but apply your own judgement too.`,
-});
 
 const VALID_VERDICTS      = new Set(["TRUE", "FALSE", "PARTIALLY TRUE", "UNCERTAIN"]);
 const MAX_EXPLANATION_WORDS = 120;
@@ -107,13 +117,13 @@ function buildSynthesisPrompt(originalClaim, enrichedInput) {
   const trusted = trustedSources || {};
 
   for (const [source, articles] of Object.entries(trusted)) {
-    for (const a of articles.slice(0, 3)) {
+    for (const a of articles.slice(0, 1)) {
       if (!a.title || !a.url) continue;
       trustedSection += `[${source.toUpperCase()}] — Stance: ${a.stance || "UNRELATED"} (confidence: ${(a.stanceConfidence || 0).toFixed(2)})\n`;
       trustedSection += `Title: ${a.title}\n`;
       trustedSection += `URL: ${a.url}\n`;
       if (a.text && a.text.length > 50) {
-        trustedSection += `Article excerpt: ${a.text.slice(0, 300)}\n`;
+        trustedSection += `Article excerpt: ${a.text.slice(0, 80)}\n`;
       }
       trustedSection += "\n";
       trustedURLs.push(a.url);
@@ -122,13 +132,13 @@ function buildSynthesisPrompt(originalClaim, enrichedInput) {
 
   // ── Other source articles ──────────────────────────────────
   let otherSection = "";
-  for (const a of (otherSources || []).slice(0, 2)) {
+  for (const a of (otherSources || []).slice(0, 1)) {
     if (!a.title || !a.url) continue;
     otherSection += `Stance: ${a.stance || "UNRELATED"} (confidence: ${(a.stanceConfidence || 0).toFixed(2)})\n`;
     otherSection += `Title: ${a.title}\n`;
     otherSection += `URL: ${a.url}\n`;
     if (a.text && a.text.length > 50) {
-      otherSection += `Article excerpt: ${a.text.slice(0, 300)}\n`;
+      otherSection += `Article excerpt: ${a.text.slice(0, 80)}\n`;
     }
     otherSection += "\n";
   }
@@ -174,7 +184,61 @@ async function callGeminiWithRetry(prompt) {
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const result = await model.generateContent(prompt);
+      const genAI = getGenAI();
+const model = genAI.getGenerativeModel({
+  model: "gemini-2.0-flash",
+
+  safetySettings: SAFETY_SETTINGS,
+
+  generationConfig: {
+    temperature: 0.1,
+    topP: 0.8,
+    maxOutputTokens: 128,
+
+    responseMimeType: "application/json",
+
+    responseSchema: {
+      type: "OBJECT",
+
+      properties: {
+        verdict: {
+          type: "STRING",
+        },
+
+        confidence: {
+          type: "NUMBER",
+        },
+
+        explanation: {
+          type: "STRING",
+        },
+
+        sources: {
+          type: "ARRAY",
+          items: {
+            type: "STRING",
+          },
+        },
+      },
+
+      required: [
+        "verdict",
+        "confidence",
+        "explanation",
+        "sources",
+      ],
+    },
+  },
+  systemInstruction: `You are an expert fact-checking AI integrated into a news verification system.
+Your ONLY output is a single valid JSON object. No markdown. No explanation outside the JSON.
+Always classify claims into exactly one of: TRUE, FALSE, PARTIALLY TRUE, UNCERTAIN.
+Base your verdict on the provided evidence (which includes full article text) AND your own knowledge.
+Prioritise evidence from trusted sources (BBC, Reuters, AP, NYT, Al Jazeera).
+The stance data (SUPPORTS/REFUTES/UNRELATED) has already been computed — trust it, but apply your own judgement too.`,
+});
+
+
+const result = await model.generateContent(prompt);
       const text = result.response.text();
       if (!text || !text.trim()) throw new Error("Gemini returned empty body");
       return text;
@@ -229,21 +293,41 @@ export async function analyzeWithAI(originalClaim, enrichedInput) {
     console.info("📤 Sending enriched evidence to Gemini for final synthesis…");
 
     const raw = await callGeminiWithRetry(prompt);
-
+    console.log("🔥 RAW GEMINI RESPONSE:");
+    console.log(raw);
     if (process.env.NODE_ENV === "development") {
       console.info("🧠 Gemini raw:\n", raw);
     }
 
-    const jsonStr = extractJSON(raw);
-    if (!jsonStr) throw new Error("No JSON block found in Gemini response");
-
     let parsed;
-    try {
-      parsed = JSON.parse(jsonStr);
-    } catch (parseErr) {
-      console.warn("⚠️  JSON parse failed. Raw:\n", raw);
-      throw new Error(`JSON parse error: ${parseErr.message}`);
-    }
+
+try {
+  // First try direct JSON parse
+  parsed = JSON.parse(raw);
+
+} catch (e) {
+
+  // Fallback extraction
+  const jsonStr = extractJSON(raw);
+
+  if (!jsonStr) {
+    console.log("❌ RAW RESPONSE:");
+    console.log(raw);
+
+    throw new Error("No JSON block found in Gemini response");
+  }
+
+  try {
+    parsed = JSON.parse(jsonStr);
+
+  } catch (parseErr) {
+    console.warn("⚠️ JSON parse failed. Raw:\n", raw);
+
+    throw new Error(
+      `JSON parse error: ${parseErr.message}`
+    );
+  }
+} 
 
     const verdict     = normaliseVerdict(parsed.verdict);
     const confidence  = clamp(typeof parsed.confidence === "number" ? parsed.confidence : 0.5);
