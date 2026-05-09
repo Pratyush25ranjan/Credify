@@ -16,9 +16,18 @@
 import dotenv from "dotenv";
 dotenv.config();
 const API_KEYS = [
-  process.env.GEMINI_API_KEY_1,
-  
+  process.env.GEMINI_API_KEY,
 ].filter(Boolean);
+
+if (!API_KEYS.length) {
+  console.log(
+  "Loaded Gemini keys:",
+  API_KEYS.length
+);
+  throw new Error(
+    "No Gemini API keys found in environment variables"
+  );
+}
 
 let currentKeyIndex = 0;
 
@@ -30,6 +39,7 @@ function getNextApiKey() {
     currentKeyIndex + 1
   );
 
+  // Safe even with 1 key
   currentKeyIndex =
     (currentKeyIndex + 1) % API_KEYS.length;
 
@@ -42,11 +52,11 @@ import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/ge
 // CONSTANTS
 // ─────────────────────────────────────────────────────────────
 
-const TOP_N_FOR_STANCE = 3;        // articles to fetch full text for
+const TOP_N_FOR_STANCE = 2;        // articles to fetch full text for
 const MAX_PER_TRUSTED_SOURCE = 3;
 const MAX_OTHER_SOURCES = 5;
 const ARTICLE_FETCH_TIMEOUT_MS = 8000;
-const ARTICLE_TEXT_CHAR_LIMIT = 600; // truncate before sending to Gemini
+const ARTICLE_TEXT_CHAR_LIMIT = 300; // truncate before sending to Gemini
 const TRUSTED_SOURCE_WEIGHT = 1.5;
 
 // Trusted source registry — checked against BOTH source name and URL
@@ -169,7 +179,7 @@ async function batchDetectStance(claim, articles) {
       `[Article ${i + 1}]
 Title: ${a.title}
 URL: ${a.url}
-Content: ${a.text.slice(0, 200)}`
+Content: ${a.text.slice(0, 120)}`
     )
     .join("\n\n---\n\n");
 
@@ -197,20 +207,16 @@ Return ONLY JSON array:
   let lastError;
 
   // 🔥 RETRY LOGIC
-  for (let attempt = 1; attempt <= 2; attempt++) {
-    try {
-      console.log("🚀 Sending stance batch to Gemini...");
-    console.log("Articles count:", articles.length);
-    const genAI = getGenAI();
+const genAI = getGenAI();
 
 const stanceModel = genAI.getGenerativeModel({
-  model: "gemini-2.0-flash",
+  model: "gemini-2.5-flash",
 
   safetySettings: SAFETY_SETTINGS,
 
   generationConfig: {
     temperature: 0.1,
-    maxOutputTokens: 256,
+    maxOutputTokens: 128,
 
     responseMimeType: "application/json",
 
@@ -261,6 +267,21 @@ No markdown.
 No explanations outside JSON.
 `,
 });
+
+for (let attempt = 1; attempt <= 2; attempt++) {
+
+  try {
+
+    console.log(
+      "🚀 Sending stance batch to Gemini..."
+    );
+
+    console.log(
+      "Articles count:",
+      articles.length
+    );
+
+   
       const result = await stanceModel.generateContent(prompt);
 
       const raw = result?.response?.text();
@@ -307,14 +328,29 @@ try {
 
     } catch (err) {
       lastError = err;
-
+      if (
+  err.message?.includes("429") ||
+  err.message?.includes("quota")
+) {
+  console.warn(
+    "⚠️ Gemini quota exceeded"
+  );
+}
       console.warn(
         `⚠️ Stance detection attempt ${attempt} failed:`,
         err.message
       );
 
       if (attempt < 2) {
-        await new Promise((r) => setTimeout(r, 1000)); // retry delay
+        const delay = 2000 * Math.pow(2, attempt - 1);
+
+console.log(
+  `⏳ Waiting ${delay}ms before retry...`
+);
+
+await new Promise((r) =>
+  setTimeout(r, delay)
+); // retry delay
       }
     }
   }

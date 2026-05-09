@@ -27,9 +27,9 @@ const PORT = process.env.PORT || 5000;
 const CACHE_DURATION_MS = 60 * 60 * 1000;
 const CACHE_MAX_SIZE = 200;
 const AXIOS_TIMEOUT_MS = 8000;
-const MAX_ARTICLES_BEFORE_STANCE = 10;
-const GNEWS_MAX = 25;
-const NEWSAPI_MAX = 25;
+const MAX_ARTICLES_BEFORE_STANCE = 6;
+const GNEWS_MAX = 10;
+const NEWSAPI_MAX = 10;
 
 const TRUSTED_KEYWORDS = [
   "bbc",
@@ -55,18 +55,20 @@ const TRUSTED_KEYWORDS = [
 // ============================================================
 
 const API_KEYS = [
-  process.env.GEMINI_API_KEY_1,
+  process.env.GEMINI_API_KEY,
   
 ].filter(Boolean);
+if (!API_KEYS.length) {
+  throw new Error(
+    "No Gemini API keys found"
+  );
+}
 console.log(
   "Loaded Gemini keys:",
   API_KEYS.length
 );
 
-console.log(
-  "Loaded Gemini keys:",
-  API_KEYS.length
-);
+
 
 let currentKeyIndex = 0;
 
@@ -90,7 +92,7 @@ function getGeminiModel() {
   );
 
   return genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash-lite",
   });
 }
 // ============================================================
@@ -175,72 +177,73 @@ function isTrusted(article) {
  * independently verifiable sub-claims. Each sub-claim is searched
  * and verified separately — the biggest fix for complex claims.
  */
-async function decomposeClaimIntoSubClaims(claim) {
-  try {
-    const prompt = `Break this news claim into atomic, independently verifiable sub-claims.
-Each sub-claim should be a single, concrete assertion that can be searched for and verified on its own.
 
-Claim: "${claim}"
+// async function decomposeClaimIntoSubClaims(claim) {
+//   try {
+//     const prompt = `Break this news claim into atomic, independently verifiable sub-claims.
+// Each sub-claim should be a single, concrete assertion that can be searched for and verified on its own.
 
-Return ONLY a JSON array of strings, with no markdown or explanation:
-["sub-claim 1", "sub-claim 2", ...]
+// Claim: "${claim}"
 
-Rules:
-- Maximum 4 sub-claims
-- If the claim is already atomic (simple, single assertion), return it as a 1-element array
-- Each sub-claim must be a complete sentence that makes sense standalone
-- Keep them concise (under 20 words each)`;
+// Return ONLY a JSON array of strings, with no markdown or explanation:
+// ["sub-claim 1", "sub-claim 2", ...]
 
-    const result = await getGeminiModel().generateContent(prompt);
-    const raw = result.response?.text?.() || "";
+// Rules:
+// - Maximum 4 sub-claims
+// - If the claim is already atomic (simple, single assertion), return it as a 1-element array
+// - Each sub-claim must be a complete sentence that makes sense standalone
+// - Keep them concise (under 20 words each)`;
 
-    const clean = raw.replace(/```json|```/g, "").trim();
-    let parsed;
+//     const result = await getGeminiModel().generateContent(prompt);
+//     const raw = result.response?.text?.() || "";
 
-try {
-  parsed = JSON.parse(clean);
+//     const clean = raw.replace(/```json|```/g, "").trim();
+//     let parsed;
 
-} catch {
+// try {
+//   parsed = JSON.parse(clean);
 
-  const match = clean.match(/\[[\s\S]*\]/);
+// } catch {
 
-  if (!match) {
-    throw new Error("No JSON array found");
-  }
+//   const match = clean.match(/\[[\s\S]*\]/);
 
-  parsed = JSON.parse(match[0]);
-}
+//   if (!match) {
+//     throw new Error("No JSON array found");
+//   }
 
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      const subClaims = parsed
-        .filter((s) => typeof s === "string" && s.trim().length > 5)
-        .slice(0, 2);
+//   parsed = JSON.parse(match[0]);
+// }
 
-      console.log(`🔬 Decomposed into ${subClaims.length} sub-claim(s):`, subClaims);
-      return subClaims;
-    }
-    return [claim];
-  } catch (err) {
-    console.warn("⚠️  Claim decomposition failed, using original claim:", err.message);
-    return [claim];
-  }
-}
+//     if (Array.isArray(parsed) && parsed.length > 0) {
+//       const subClaims = parsed
+//         .filter((s) => typeof s === "string" && s.trim().length > 5)
+//         .slice(0, 2);
 
-async function expandQuery(query) {
-  try {
-    const prompt = `Rewrite this search query to improve news search relevance.
-Query: "${query}"
-Return ONLY the improved query, nothing else.`;
+//       console.log(`🔬 Decomposed into ${subClaims.length} sub-claim(s):`, subClaims);
+//       return subClaims;
+//     }
+//     return [claim];
+//   } catch (err) {
+//     console.warn("⚠️  Claim decomposition failed, using original claim:", err.message);
+//     return [claim];
+//   }
+// }
 
-    const result = await getGeminiModel().generateContent(prompt);
-    const expanded = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    const clean = expanded.replace(/^["']|["']$/g, "").trim();
-    return clean.length > 5 ? clean : query;
-  } catch (err) {
-    console.warn("⚠️  Query expansion failed:", err.message);
-    return query;
-  }
-}
+// async function expandQuery(query) {
+//   try {
+//     const prompt = `Rewrite this search query to improve news search relevance.
+// Query: "${query}"
+// Return ONLY the improved query, nothing else.`;
+
+//     const result = await getGeminiModel().generateContent(prompt);
+//     const expanded = result.response?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+//     const clean = expanded.replace(/^["']|["']$/g, "").trim();
+//     return clean.length > 5 ? clean : query;
+//   } catch (err) {
+//     console.warn("⚠️  Query expansion failed:", err.message);
+//     return query;
+//   }
+// }
 
 function deduplicateArticles(articles) {
   const seenTitles = new Set();
@@ -400,7 +403,11 @@ for (let i = 0; i < subClaims.length; i++) {
   subClaimResults.push(result);
 
   // ⏱️ small delay to avoid rate limit
-  await new Promise((r) => setTimeout(r, 1500));
+  if (i < subClaims.length - 1) {
+  await new Promise((r) =>
+    setTimeout(r, 3000)
+  );
+}
 }
 
     // ── STEP 4: Merge sub-claim results ───────────────────────
@@ -497,7 +504,7 @@ try {
       subClaims,
       subClaimResults,
       trustedSources: allTrustedSources,
-      otherSources: allOtherSources.slice(0, 2),
+      otherSources: [],
       credibilityScore,
     });
 
@@ -540,7 +547,7 @@ try {
       trustedMatches: Object.keys(allTrustedSources).length,
       sourcesChecked: totalSourcesChecked,
       trustedSources: allTrustedSources,
-      otherSources: allOtherSources.slice(0, 2),
+      otherSources: [],
       ai: aiResult,
       fromCache: false,
     };

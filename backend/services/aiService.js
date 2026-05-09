@@ -17,38 +17,19 @@
  */
 import dotenv from "dotenv";
 dotenv.config();
-const API_KEYS = [
-  process.env.GEMINI_API_KEY_1,
- 
-].filter(Boolean);
-
-let currentKeyIndex = 0;
-
-function getNextApiKey() {
-  const key = API_KEYS[currentKeyIndex];
-
-  console.log(
-    "Using Gemini key:",
-    currentKeyIndex + 1
-  );
-
-  currentKeyIndex =
-    (currentKeyIndex + 1) % API_KEYS.length;
-
-  return key;
-}
-console.log("Loaded Gemini keys:", API_KEYS.length);
+console.log(
+  "Gemini key loaded:",
+  !!process.env.GEMINI_API_KEY
+);
 import { GoogleGenerativeAI, HarmCategory, HarmBlockThreshold } from "@google/generative-ai";
 
 // ─────────────────────────────────────────────────────────────
 // SETUP
 // ─────────────────────────────────────────────────────────────
 
-function getGenAI() {
-  return new GoogleGenerativeAI(
-    getNextApiKey()
-  );
-}
+const genAI = new GoogleGenerativeAI(
+  process.env.GEMINI_API_KEY
+);
 
 const SAFETY_SETTINGS = [
   { category: HarmCategory.HARM_CATEGORY_HARASSMENT,        threshold: HarmBlockThreshold.BLOCK_NONE },
@@ -123,7 +104,7 @@ function buildSynthesisPrompt(originalClaim, enrichedInput) {
       trustedSection += `Title: ${a.title}\n`;
       trustedSection += `URL: ${a.url}\n`;
       if (a.text && a.text.length > 50) {
-        trustedSection += `Article excerpt: ${a.text.slice(0, 80)}\n`;
+       trustedSection += `Excerpt: ${a.text.slice(0, 50)}\n`;
       }
       trustedSection += "\n";
       trustedURLs.push(a.url);
@@ -138,7 +119,7 @@ function buildSynthesisPrompt(originalClaim, enrichedInput) {
     otherSection += `Title: ${a.title}\n`;
     otherSection += `URL: ${a.url}\n`;
     if (a.text && a.text.length > 50) {
-      otherSection += `Article excerpt: ${a.text.slice(0, 80)}\n`;
+     otherSection += `Excerpt: ${a.text.slice(0, 50)}\n`;
     }
     otherSection += "\n";
   }
@@ -184,16 +165,16 @@ async function callGeminiWithRetry(prompt) {
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const genAI = getGenAI();
+      
 const model = genAI.getGenerativeModel({
-  model: "gemini-2.0-flash",
+ model: "gemini-2.5-flash-lite",
 
   safetySettings: SAFETY_SETTINGS,
 
   generationConfig: {
     temperature: 0.1,
     topP: 0.8,
-    maxOutputTokens: 128,
+    maxOutputTokens: 256,
 
     responseMimeType: "application/json",
 
@@ -293,41 +274,58 @@ export async function analyzeWithAI(originalClaim, enrichedInput) {
     console.info("📤 Sending enriched evidence to Gemini for final synthesis…");
 
     const raw = await callGeminiWithRetry(prompt);
-    console.log("🔥 RAW GEMINI RESPONSE:");
-    console.log(raw);
-    if (process.env.NODE_ENV === "development") {
-      console.info("🧠 Gemini raw:\n", raw);
-    }
 
-    let parsed;
+console.log("🔥 RAW GEMINI RESPONSE:");
+console.log(raw);
 
+// 🔥 Empty response protection
+if (!raw || !raw.trim()) {
+  throw new Error("Gemini returned empty response");
+}
+
+let parsed = null;
+
+// 1. Direct parse attempt
 try {
-  // First try direct JSON parse
+
   parsed = JSON.parse(raw);
 
-} catch (e) {
+} catch {
 
-  // Fallback extraction
-  const jsonStr = extractJSON(raw);
+  // 2. Extract JSON object from messy output
+  const jsonMatch = raw.match(/\{[\s\S]*\}/);
 
-  if (!jsonStr) {
-    console.log("❌ RAW RESPONSE:");
-    console.log(raw);
+  if (jsonMatch) {
 
-    throw new Error("No JSON block found in Gemini response");
+    try {
+
+      parsed = JSON.parse(jsonMatch[0]);
+
+    } catch (err) {
+
+      console.warn(
+        "⚠️ Extracted JSON parse failed:",
+        err.message
+      );
+    }
   }
+}
 
-  try {
-    parsed = JSON.parse(jsonStr);
+// 🔥 Final fallback
+if (!parsed || typeof parsed !== "object") {
 
-  } catch (parseErr) {
-    console.warn("⚠️ JSON parse failed. Raw:\n", raw);
+  console.warn(
+    "⚠️ Gemini returned non-JSON response"
+  );
 
-    throw new Error(
-      `JSON parse error: ${parseErr.message}`
-    );
-  }
-} 
+  return {
+    verdict: "UNCERTAIN",
+    confidence: 0.5,
+    explanation:
+      "AI could not generate structured verification output.",
+    sources: [],
+  };
+}
 
     const verdict     = normaliseVerdict(parsed.verdict);
     const confidence  = clamp(typeof parsed.confidence === "number" ? parsed.confidence : 0.5);
